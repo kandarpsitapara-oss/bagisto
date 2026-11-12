@@ -1,73 +1,41 @@
 
-name: Bagisto 2.5 CI-CD Pipeline
+- name: Deploy to EC2
+  run: |
+    APP_PATH="$(printf '%s' "$APP_PATH" | tr -d '\r\n')"
 
-on:
-  push:
-    branches:
-      - main
+    ssh -i ~/.ssh/deploy_key \
+      -o StrictHostKeyChecking=yes \
+      "$EC2_USER@$EC2_HOST" \
+      "APP_PATH='$APP_PATH' bash -s" <<'REMOTE'
 
-  workflow_dispatch:
+      set -e
 
-jobs:
-  deploy:
-    name: Deploy Bagisto to EC2
-    runs-on: ubuntu-latest
+      cd "$APP_PATH"
 
-    steps:
-      - name: Configure SSH
-        env:
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
+      echo "Pulling latest code..."
+      git pull --ff-only origin main
 
-          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
+      echo "Installing Composer dependencies..."
+      composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
 
-          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+      echo "Installing NPM dependencies..."
+      npm ci
 
-      - name: Deploy to EC2
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          APP_PATH: ${{ secrets.APP_PATH }}
-        run: |
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=yes \
-            "$EC2_USER@$EC2_HOST" \
-            "APP_PATH='$APP_PATH' bash -s" <<'REMOTE'
+      echo "Building frontend assets..."
+      npm run build
 
-          set -e
+      echo "Running database migrations..."
+      php artisan migrate --force
 
-          cd "$APP_PATH"
+      echo "Clearing Laravel cache..."
+      php artisan optimize:clear
 
-          echo "Pulling latest code..."
-          git pull --ff-only origin main
+      echo "Caching configuration..."
+      php artisan config:cache
 
-          echo "Installing Composer dependencies..."
-          composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+      echo "Fixing permissions..."
+      sudo chown -R ubuntu:www-data storage bootstrap/cache
+      sudo chmod -R ug+rwX storage bootstrap/cache
 
-          echo "Installing NPM dependencies..."
-          npm ci
-
-          echo "Building frontend assets..."
-          npm run build
-
-          echo "Running database migrations..."
-          php artisan migrate --force
-
-          echo "Clearing Laravel cache..."
-          php artisan optimize:clear
-
-          echo "Caching configuration..."
-          php artisan config:cache
-
-          echo "Fixing permissions..."
-          sudo chown -R ubuntu:www-data storage bootstrap/cache
-          sudo chmod -R ug+rwX storage bootstrap/cache
-
-          echo "Bagisto deployment successful!"
-
-          REMOTE
-
+      echo "Deal Share deployment successful!"
+      REMOTE
